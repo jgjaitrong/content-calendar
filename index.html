@@ -420,9 +420,17 @@ function weekdayToDate(idx,wd){
 /* ============ persistence + migration ============ */
 let _cloudSaveTimer = null;
 let _lastLocalWriteAt = 0;
+let _initialLoading = true;   // 🛡️ ห้าม save ขึ้น cloud จนกว่า cloud load จะเสร็จ
+function isDataEmpty(d){
+  if (!d) return true;
+  const monthsEmpty = !d.months || Object.values(d.months).every(a => !a || a.length === 0);
+  const activitiesEmpty = !d.activities || Object.keys(d.activities).length === 0;
+  return monthsEmpty && activitiesEmpty;
+}
 function save(){
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }catch(e){}
   if (!sb) return;
+  if (_initialLoading) return;  // 🛡️ กัน race condition ตอนโหลดครั้งแรก
   clearTimeout(_cloudSaveTimer);
   setSyncStatus("syncing", "☁️ กำลังบันทึก...");
   _cloudSaveTimer = setTimeout(async () => {
@@ -637,7 +645,19 @@ document.getElementById("fileInput").addEventListener("change",e=>{ const file=e
   r.readAsText(file); e.target.value=""; });
 document.getElementById("csvBtn").addEventListener("click",exportCSV);
 document.getElementById("printBtn").addEventListener("click",()=>window.print());
-document.getElementById("resetBtn").addEventListener("click",()=>{ if(confirm("รีเซ็ตเป็นค่าเริ่มต้น (ว่างเปล่า สิงหาคม 2026)? ข้อมูลทุกเดือนจะหาย")){ data=JSON.parse(JSON.stringify(DEFAULT_DATA)); render(); toast("รีเซ็ตแล้ว"); } });
+document.getElementById("resetBtn").addEventListener("click",()=>{
+  const cloudWarn = sb ? "\n\n⚠️ นี่จะลบข้อมูลของทั้งทีมบน cloud ด้วย! (ทุกคนที่ใช้ปฏิทินนี้จะเห็นข้อมูลว่าง)\n\nถ้ามั่นใจ พิมพ์ RESET เพื่อยืนยัน:" : "";
+  const msg = "รีเซ็ตเป็นค่าเริ่มต้น (ว่างเปล่า สิงหาคม 2026)? ข้อมูลทุกเดือนจะหาย" + cloudWarn;
+  if (sb) {
+    const ans = prompt(msg);
+    if (ans !== "RESET") { toast("ยกเลิกการรีเซ็ต"); return; }
+  } else {
+    if (!confirm(msg)) return;
+  }
+  data=JSON.parse(JSON.stringify(DEFAULT_DATA));
+  render();
+  toast("รีเซ็ตแล้ว");
+});
 function exportCSV(){
   const head=["เดือน","วันที่","วัน","หัวข้อ","หมวดหมู่","รูปแบบ","ผู้รับผิดชอบ","สถานะ"];
   const rows=[head];
@@ -967,14 +987,19 @@ render();
 if (sb) {
   setSyncStatus("syncing", "☁️ กำลังโหลดจาก cloud...");
   cloudLoad().then(cloud => {
-    if (cloud) {
+    // 🛡️ ใช้ข้อมูล cloud เฉพาะเมื่อมีเนื้อหา (กันไม่ให้ข้อมูลว่างทับ local ที่มีข้อมูล)
+    if (cloud && !isDataEmpty(cloud)) {
       const migrated = migrate(cloud);
       if (migrated) { data = migrated; render(); }
     }
+    _initialLoading = false;  // ✅ เปิดให้ save ขึ้น cloud ได้แล้ว
+    // ถ้า local มีข้อมูลแต่ cloud ว่าง — push local ขึ้น cloud
+    if (!isDataEmpty(data)) save();
     setSyncStatus("ok", "☁️ ซิงค์แล้ว");
     subscribeCloud();
   });
 } else {
+  _initialLoading = false;
   setSyncStatus("off", "💾 โหมดเครื่องเดียว (ยังไม่ตั้ง Supabase)");
 }
 </script>
